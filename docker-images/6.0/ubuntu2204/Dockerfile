@@ -1,21 +1,22 @@
 # ffmpeg - http://ffmpeg.org/download.html
 #
-# From https://trac.ffmpeg.org/wiki/CompilationGuide/Centos
+# From https://trac.ffmpeg.org/wiki/CompilationGuide/Ubuntu
 #
 # https://hub.docker.com/r/jrottenberg/ffmpeg/
 #
 #
-FROM    centos:7 AS base
-
-RUN     yum -y install libgomp && \
-        yum clean all;
-
-
-FROM        base AS build
+FROM        ubuntu:22.04 AS base
 
 WORKDIR     /tmp/workdir
 
-ENV         FFMPEG_VERSION=5.1.3 \
+RUN     apt-get -yqq update && \
+        apt-get install -yq --no-install-recommends ca-certificates expat libgomp1 && \
+        apt-get autoremove -y && \
+        apt-get clean -y
+
+FROM base as build
+
+ENV         FFMPEG_VERSION=6.0 \
     AOM_VERSION=v1.0.0 \
     CHROMAPRINT_VERSION=1.5.0 \
     FDKAAC_VERSION=0.1.5 \
@@ -73,64 +74,30 @@ ARG         PREFIX=/opt/ffmpeg
 ARG         LD_LIBRARY_PATH="/opt/ffmpeg/lib:/opt/ffmpeg/lib64"
 
 
-RUN     buildDeps="autoconf \
-                   automake \
-                   bzip2 \
-                   cmake3 \
-                   diffutils \
-                   expat-devel \
-                   file \
-                   gcc \
-                   gcc-c++ \
-                   git \
-                   gperf \
-                   libtool \
-                   make \
-                   perl \
-                   python3 \
-                   openssl-devel \
-                   tar \
-                   yasm \
-                   which \
-                   zlib-devel" && \
-        echo "${SRC}/lib" > /etc/ld.so.conf.d/libc.conf && \
-        yum --enablerepo=extras install -y epel-release && \
-        yum --enablerepo=epel install -y ${buildDeps} && \
-        alternatives --install /usr/bin/cmake cmake /usr/bin/cmake3 0 && \
-        # Install the tools required to build nasm 2.14.02 \
-        nasmDeps="asciidoc \
-                  perl-Font-TTF \
-                  perl-Sort-Versions \
-                  xmlto" && \
-        yum --enablerepo=epel install -y ${nasmDeps} && \
-        # Compile and install nasm 2.14.02 \
-        DIR=/tmp/nasm && \
-        mkdir -p ${DIR} && \
-        curl -LSs https://www.nasm.us/pub/nasm/releasebuilds/2.14.02/nasm-2.14.02.tar.gz | \
-        tar xzC ${DIR} --strip-components=1 && \
-        pushd ${DIR} && \
-        ./configure --host=x86_64-redhat-linux-gnu \
-                    --build=x86_64-redhat-linux-gnu \
-                    --prefix=/usr/local \
-                    --exec-prefix=/usr/local \
-                    --bindir=/usr/local/bin \
-                    --sbindir=/usr/local/sbin \
-                    --sysconfdir=/usr/local/etc \
-                    --datadir=/usr/local/share \
-                    --includedir=/usr/local/include \
-                    --libdir=/usr/local/lib \
-                    --libexecdir=/usr/local/libexec \
-                    --enable-sections && \
-        make all && \
-        make install && \
-        make install_rdf && \
-        popd && rm -rf ${DIR} && \
-        alternatives --install /usr/bin/nasm nasm /usr/local/bin/nasm 0 && \
-        # Now that we have a modern nasm build and available, we can undo the last \
-        # yum transaction as none of those packages are required for the rest of the build \
-        yum history undo $(yum history info | grep 'Transaction ID' | awk -F: '{print$2}' | tr -d ' ') -y && \
-        yum autoremove -y
+ARG DEBIAN_FRONTEND=noninteractive
 
+RUN      buildDeps="autoconf \
+                    automake \
+                    cmake \
+                    curl \
+                    bzip2 \
+                    libexpat1-dev \
+                    g++ \
+                    gcc \
+                    git \
+                    gperf \
+                    libtool \
+                    make \
+                    meson \
+                    nasm \
+                    perl \
+                    pkg-config \
+                    python \
+                    libssl-dev \
+                    yasm \
+                    zlib1g-dev" && \
+        apt-get -yqq update && \
+        apt-get install -yq --no-install-recommends ${buildDeps}
 ## libvmaf https://github.com/Netflix/vmaf
 RUN \
         if which meson || false; then \
@@ -575,6 +542,7 @@ RUN  \
         --enable-libsrt \
         --enable-libtheora \
         --enable-libvidstab \
+        --enable-libvmaf \
         --enable-libvorbis \
         --enable-libvpx \
         --enable-libwebp \
@@ -603,27 +571,29 @@ RUN  \
         cd tools && \
         make qt-faststart && cp qt-faststart ${PREFIX}/bin/
 
+## cleanup
 RUN \
-        ldd ${PREFIX}/bin/ffmpeg | grep opt/ffmpeg | cut -d ' ' -f 3 | xargs -i cp {} /usr/local/lib64/ && \
-        for lib in /usr/local/lib64/*.so.*; do ln -s "${lib##*/}" "${lib%%.so.*}".so; done && \
+        ldd ${PREFIX}/bin/ffmpeg | grep opt/ffmpeg | cut -d ' ' -f 3 | xargs -i cp {} /usr/local/lib/ && \
+        for lib in /usr/local/lib/*.so.*; do ln -s "${lib##*/}" "${lib%%.so.*}".so; done && \
         cp ${PREFIX}/bin/* /usr/local/bin/ && \
         cp -r ${PREFIX}/share/ffmpeg /usr/local/share/ && \
-        LD_LIBRARY_PATH=/usr/local/lib64:/usr/local/lib ffmpeg -buildconf && \
+        LD_LIBRARY_PATH=/usr/local/lib ffmpeg -buildconf && \
         cp -r ${PREFIX}/include/libav* ${PREFIX}/include/libpostproc ${PREFIX}/include/libsw* /usr/local/include && \
-        mkdir -p /usr/local/lib64/pkgconfig && \
+        mkdir -p /usr/local/lib/pkgconfig && \
         for pc in ${PREFIX}/lib/pkgconfig/libav*.pc ${PREFIX}/lib/pkgconfig/libpostproc.pc ${PREFIX}/lib/pkgconfig/libsw*.pc; do \
-          sed "s:${PREFIX}:/usr/local:g" <"$pc" >/usr/local/lib64/pkgconfig/"${pc##*/}"; \
+          sed "s:${PREFIX}:/usr/local:g" <"$pc" >/usr/local/lib/pkgconfig/"${pc##*/}"; \
         done
 
-FROM        base
+FROM        base AS release
 LABEL       org.opencontainers.image.authors="julien@rottenberg.info" \
             org.opencontainers.image.source=https://github.com/jrottenberg/ffmpeg
 
-ENV         LD_LIBRARY_PATH=/usr/local/lib64:/usr/local/lib
+ENV         LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib64
 
+CMD         ["--help"]
 ENTRYPOINT  ["ffmpeg"]
 
-COPY --from=build /usr/local/ /usr/local/
+COPY --from=build /usr/local /usr/local/
 
 # Let's make sure the app built correctly
 # Convenient to verify on https://hub.docker.com/r/jrottenberg/ffmpeg/builds/ console output
